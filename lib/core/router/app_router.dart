@@ -10,6 +10,7 @@ import '../../features/rooms/presentation/room_edit_page.dart';
 import '../../features/rooms/presentation/rooms_page.dart';
 import '../../features/settings/presentation/broker_settings_page.dart';
 import '../../features/settings/presentation/settings_page.dart';
+import '../../features/settings/presentation/mqtt_debug_page.dart';
 
 class AppRouter {
   static final GlobalKey<NavigatorState> _rootNavigatorKey =
@@ -75,6 +76,10 @@ class AppRouter {
               GoRoute(
                 path: 'broker', // Tam yol: /settings/broker
                 builder: (context, state) => const BrokerSettingsPage(),
+              ),
+              GoRoute(
+                path: 'mqtt-debug', // Tam yol: /settings/mqtt-debug
+                builder: (context, state) => const MqttDebugPage(),
               ),
             ],
           ),
