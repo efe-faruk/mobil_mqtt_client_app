@@ -1,0 +1,11 @@
+# Kök dizindeki her şeyi yoksay
+/*
+
+# lib klasörünü (ve içindeki her şeyi) takip et
+!/lib/
+
+# pubspec.yaml dosyasını takip et
+!/pubspec.yaml
+
+# .gitignore dosyasının kendisini takip et (Önerilen)
+!/.gitignore
