@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import '../../data/db/app_database.dart';
+
 import '../../features/dashboard/presentation/dashboard_page.dart';
 import '../../features/devices/presentation/device_add_page.dart';
 import '../../features/devices/presentation/device_edit_page.dart';
@@ -40,7 +42,8 @@ class AppRouter {
             routes: [
               GoRoute(
                 path: 'edit', // Tam yol: /rooms/edit
-                builder: (context, state) => const RoomEditPage(),
+                builder: (context, state) =>
+                    RoomEditPage(room: state.extra as Room?),
               ),
             ],
           ),
