@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../data/db/app_database.dart';
 
@@ -11,6 +12,7 @@ import '../../features/rooms/presentation/rooms_page.dart';
 import '../../features/settings/presentation/broker_settings_page.dart';
 import '../../features/settings/presentation/settings_page.dart';
 import '../../features/settings/presentation/mqtt_debug_page.dart';
+import '../providers/app_providers.dart';
 
 class AppRouter {
   static final GlobalKey<NavigatorState> _rootNavigatorKey =
@@ -90,13 +92,17 @@ class AppRouter {
 }
 
 // ShellRoute'un gövdesini oluşturan, sekmeler arası geçişi sağlayan dahili Scaffold
-class MainShellScaffold extends StatelessWidget {
+class MainShellScaffold extends ConsumerWidget {
   final Widget child;
 
   const MainShellScaffold({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Orkestratör burada izleniyor. Uygulama açık olduğu sürece
+    // arka planda bağlantı durumunu takip edecek ve cihaz aboneliklerini yönetecektir.
+    ref.watch(mqttOrchestratorProvider);
+
     final GoRouterState state = GoRouterState.of(context);
 
     return Scaffold(

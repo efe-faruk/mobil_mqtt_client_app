@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,64 +12,71 @@ class MqttDebugPage extends ConsumerStatefulWidget {
 }
 
 class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
-  final MqttService _mqttService = MqttService();
-
-  // Controllers
   final _subTopicCtrl = TextEditingController();
   final _pubTopicCtrl = TextEditingController();
   final _pubPayloadCtrl = TextEditingController();
 
-  // State
   bool _retain = false;
-  MqttConnectionStatus _status = MqttConnectionStatus.disconnected;
   final List<MqttMessage> _messages = [];
-
-  StreamSubscription? _statusSub;
-  StreamSubscription? _msgSub;
-
-  @override
-  void initState() {
-    super.initState();
-    _listenToMqtt();
-  }
-
-  void _listenToMqtt() {
-    _statusSub = _mqttService.connectionStatus.listen((status) {
-      if (mounted) setState(() => _status = status);
-    });
-
-    _msgSub = _mqttService.messages.listen((msg) {
-      if (mounted) {
-        setState(() {
-          _messages.insert(0, msg); // Yeni mesajlar en üste eklensin
-        });
-      }
-    });
-  }
 
   @override
   void dispose() {
-    _statusSub?.cancel();
-    _msgSub?.cancel();
     _subTopicCtrl.dispose();
     _pubTopicCtrl.dispose();
     _pubPayloadCtrl.dispose();
-    _mqttService.disconnect(); // Sayfa kapanınca test bağlantısını kes
     super.dispose();
   }
 
   void _connect() {
-    // app_providers.dart içindeki notifer'dan mevcut broker ayarlarını alıyoruz
     final config = ref.read(brokerConfigProvider);
-    _mqttService.connect(config);
+    final mqttService = ref.read(mqttServiceProvider);
+    mqttService.connect(config);
   }
 
   void _disconnect() {
-    _mqttService.disconnect();
+    final mqttService = ref.read(mqttServiceProvider);
+    mqttService.disconnect();
   }
 
   @override
   Widget build(BuildContext context) {
+    // Stream'in son durumunu oku (Varsayılan olarak disconnected başlatıyoruz)
+    final connectionStatusAsync = ref.watch(mqttConnectionStatusProvider);
+    final status =
+        connectionStatusAsync.value ?? MqttConnectionStatus.disconnected;
+
+    // Hata durumunu ve mesajları dinlemek için Riverpod'un gücünü kullanıyoruz
+    ref.listen<AsyncValue<MqttConnectionStatus>>(
+      mqttConnectionStatusProvider,
+      (previous, next) {
+        next.whenData((newStatus) {
+          if (newStatus == MqttConnectionStatus.fault) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                    'Bağlantı başarısız! Broker ayarlarınızı kontrol edin.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        });
+      },
+    );
+
+    // Gelen mesajları listeye eklemek için ayrı bir dinleyici
+    ref.listen<AsyncValue<MqttMessage>>(
+      mqttMessagesProvider,
+      (previous, next) {
+        next.whenData((msg) {
+          if (mounted) {
+            setState(() {
+              _messages.insert(0, msg);
+            });
+          }
+        });
+      },
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('MQTT Debug'),
@@ -80,11 +86,11 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildStatusSection(),
+            _buildStatusSection(status),
             const Divider(),
-            _buildSubscribeSection(),
+            _buildSubscribeSection(status),
             const Divider(),
-            _buildPublishSection(),
+            _buildPublishSection(status),
             const Divider(),
             const Text('Gelen Mesajlar',
                 style: TextStyle(fontWeight: FontWeight.bold)),
@@ -96,7 +102,7 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
     );
   }
 
-  Widget _buildStatusSection() {
+  Widget _buildStatusSection(MqttConnectionStatus status) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -104,16 +110,16 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
           children: [
             Icon(
               Icons.circle,
-              color: _status == MqttConnectionStatus.connected
+              color: status == MqttConnectionStatus.connected
                   ? Colors.green
-                  : (_status == MqttConnectionStatus.connecting
+                  : (status == MqttConnectionStatus.connecting
                       ? Colors.orange
                       : Colors.red),
               size: 16,
             ),
             const SizedBox(width: 8),
             Text(
-              _status.name.toUpperCase(),
+              status.name.toUpperCase(),
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ],
@@ -122,14 +128,13 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
           children: [
             ElevatedButton(
               onPressed:
-                  _status != MqttConnectionStatus.connected ? _connect : null,
+                  status != MqttConnectionStatus.connected ? _connect : null,
               child: const Text('Connect'),
             ),
             const SizedBox(width: 8),
             OutlinedButton(
-              onPressed: _status == MqttConnectionStatus.connected
-                  ? _disconnect
-                  : null,
+              onPressed:
+                  status == MqttConnectionStatus.connected ? _disconnect : null,
               child: const Text('Disconnect'),
             ),
           ],
@@ -138,12 +143,15 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
     );
   }
 
-  Widget _buildSubscribeSection() {
+  Widget _buildSubscribeSection(MqttConnectionStatus status) {
+    final isConnected = status == MqttConnectionStatus.connected;
+
     return Row(
       children: [
         Expanded(
           child: TextField(
             controller: _subTopicCtrl,
+            enabled: isConnected,
             decoration: const InputDecoration(
               labelText: 'Subscribe Topic',
               border: OutlineInputBorder(),
@@ -153,21 +161,27 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
         ),
         const SizedBox(width: 8),
         FilledButton(
-          onPressed: () {
-            if (_subTopicCtrl.text.isNotEmpty) {
-              _mqttService.subscribe(_subTopicCtrl.text);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('${_subTopicCtrl.text} abonesi olundu')),
-              );
-            }
-          },
+          onPressed: isConnected
+              ? () {
+                  if (_subTopicCtrl.text.isNotEmpty) {
+                    ref.read(mqttServiceProvider).subscribe(_subTopicCtrl.text);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content:
+                              Text('${_subTopicCtrl.text} abonesi olundu')),
+                    );
+                  }
+                }
+              : null,
           child: const Text('Sub'),
         ),
       ],
     );
   }
 
-  Widget _buildPublishSection() {
+  Widget _buildPublishSection(MqttConnectionStatus status) {
+    final isConnected = status == MqttConnectionStatus.connected;
+
     return Column(
       children: [
         Row(
@@ -175,6 +189,7 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
             Expanded(
               child: TextField(
                 controller: _pubTopicCtrl,
+                enabled: isConnected,
                 decoration: const InputDecoration(
                   labelText: 'Publish Topic',
                   border: OutlineInputBorder(),
@@ -186,6 +201,7 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
             Expanded(
               child: TextField(
                 controller: _pubPayloadCtrl,
+                enabled: isConnected,
                 decoration: const InputDecoration(
                   labelText: 'Payload',
                   border: OutlineInputBorder(),
@@ -203,22 +219,26 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
               children: [
                 Switch(
                   value: _retain,
-                  onChanged: (val) => setState(() => _retain = val),
+                  onChanged: isConnected
+                      ? (val) => setState(() => _retain = val)
+                      : null,
                 ),
                 const Text('Retain'),
               ],
             ),
             FilledButton.icon(
-              onPressed: () {
-                if (_pubTopicCtrl.text.isNotEmpty &&
-                    _pubPayloadCtrl.text.isNotEmpty) {
-                  _mqttService.publish(
-                    _pubTopicCtrl.text,
-                    _pubPayloadCtrl.text,
-                    retain: _retain,
-                  );
-                }
-              },
+              onPressed: isConnected
+                  ? () {
+                      if (_pubTopicCtrl.text.isNotEmpty &&
+                          _pubPayloadCtrl.text.isNotEmpty) {
+                        ref.read(mqttServiceProvider).publish(
+                              _pubTopicCtrl.text,
+                              _pubPayloadCtrl.text,
+                              retain: _retain,
+                            );
+                      }
+                    }
+                  : null,
               icon: const Icon(Icons.send),
               label: const Text('Publish'),
             ),
