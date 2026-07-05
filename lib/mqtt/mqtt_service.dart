@@ -31,6 +31,24 @@ class MqttService {
 
   /// Broker'a bağlanır ve gerekli callback'leri ayarlar.
   Future<void> connect(BrokerConfig config) async {
+    // ========================================================
+    // YENİ GÜVENLİK KONTROLÜ: Arka plan zaten aktifse (Çakışma Önleyici)
+    // ========================================================
+    if (_client != null &&
+        _client!.connectionStatus?.state ==
+            mqtt.MqttConnectionState.connected) {
+      // Aynı ID ile bağlıysak soketi hiç yorma, yeni uyanan UI'a "Ben bağlıyım" mesajı at
+      _connectionStatusController.add(MqttConnectionStatus.connected);
+      return;
+    }
+
+    // Eğer asılı kalmış eski bir client (connecting/fault durumunda) varsa temizle
+    if (_client != null) {
+      _client!.autoReconnect = false;
+      _client!.disconnect();
+    }
+    // ========================================================
+
     _connectionStatusController.add(MqttConnectionStatus.connecting);
 
     // Client ayarları

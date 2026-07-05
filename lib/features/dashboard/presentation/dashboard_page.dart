@@ -8,7 +8,6 @@ import 'widgets/device_card.dart';
 
 class DashboardPage extends ConsumerWidget {
   const DashboardPage({super.key});
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final roomsAsync = ref.watch(roomsProvider);
@@ -24,11 +23,36 @@ class DashboardPage extends ConsumerWidget {
           ),
         ],
       ),
-      body: (roomsAsync.isLoading || devicesAsync.isLoading)
-          ? const Center(child: CircularProgressIndicator())
-          : _buildDashboardContent(
-              context, roomsAsync.value, devicesAsync.value),
+      // Hata kontrolü, yükleme kontrolü ve içerik gösterimi
+      body: _buildBody(context, roomsAsync, devicesAsync),
     );
+  }
+
+  // Okunabilirliği artırmak için gövdeyi dışarı çıkardık
+  Widget _buildBody(
+    BuildContext context,
+    AsyncValue<List<Room>> roomsAsync,
+    AsyncValue<List<Device>> devicesAsync,
+  ) {
+    // 1. Herhangi bir provider'da hata varsa hata ekranı göster
+    if (roomsAsync.hasError || devicesAsync.hasError) {
+      return Center(
+        child: Text(
+          'Veriler yüklenirken hata oluştu!',
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      );
+    }
+
+    // 2. İlk yüklenme aşamasındaysa spinner göster
+    // (isLoading, veri varken true dönmez, bu sayede sensör güncellenirken ekran titremez)
+    if (roomsAsync.isLoading || devicesAsync.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    // 3. Veriler başarıyla geldiyse ana içeriği çiz
+    return _buildDashboardContent(
+        context, roomsAsync.value, devicesAsync.value);
   }
 
   Widget _buildDashboardContent(

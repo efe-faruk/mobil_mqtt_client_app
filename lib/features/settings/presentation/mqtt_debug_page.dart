@@ -3,6 +3,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/app_providers.dart';
 import '../../../mqtt/mqtt_service.dart';
+import '../../../models/broker_config.dart';
+
+// ==========================================
+// LOKAL DEBUG PROVIDER'LARI (Sadece bu sayfada yaşarlar)
+// ==========================================
+// Bu provider'lar autoDispose olduğu için sayfa kapandığında bellekten uçarlar.
+final debugStatusProvider =
+    StreamProvider.autoDispose<MqttConnectionStatus>((ref) {
+  final service = ref.watch(debugMqttServiceProvider);
+  return service.connectionStatus;
+});
+
+final debugMessagesProvider = StreamProvider.autoDispose<MqttMessage>((ref) {
+  final service = ref.watch(debugMqttServiceProvider);
+  return service.messages;
+});
 
 class MqttDebugPage extends ConsumerStatefulWidget {
   const MqttDebugPage({super.key});
@@ -28,26 +44,42 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
   }
 
   void _connect() {
-    final config = ref.read(brokerConfigProvider);
-    final mqttService = ref.read(mqttServiceProvider);
-    mqttService.connect(config);
+    // Global broker ayarlarını alıyoruz
+    final globalConfig = ref.read(brokerConfigProvider);
+
+    // ÇAKIŞMAYI ÖNLEMEK İÇİN: Sadece bu sayfaya özel yeni bir config oluşturuyoruz
+    // ve orijinal clientId'nin sonuna '_debug' ekliyoruz.
+    final debugConfig = BrokerConfig(
+      host: globalConfig.host,
+      port: globalConfig.port,
+      clientId: '${globalConfig.clientId}_debug', // <-- KRİTİK DEĞİŞİKLİK
+      keepAliveSeconds: globalConfig.keepAliveSeconds,
+      useAuth: globalConfig.useAuth,
+      username: globalConfig.username,
+      password: globalConfig.password,
+    );
+
+    final mqttService = ref.read(debugMqttServiceProvider);
+
+    // Orijinal globalConfig yerine, ismini değiştirdiğimiz debugConfig ile bağlanıyoruz
+    mqttService.connect(debugConfig);
   }
 
   void _disconnect() {
-    final mqttService = ref.read(mqttServiceProvider);
+    final mqttService = ref.read(debugMqttServiceProvider);
     mqttService.disconnect();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Stream'in son durumunu oku (Varsayılan olarak disconnected başlatıyoruz)
-    final connectionStatusAsync = ref.watch(mqttConnectionStatusProvider);
+    // Ana uygulamanın durumunu değil, lokal debug servisin durumunu dinliyoruz
+    final connectionStatusAsync = ref.watch(debugStatusProvider);
     final status =
         connectionStatusAsync.value ?? MqttConnectionStatus.disconnected;
 
-    // Hata durumunu ve mesajları dinlemek için Riverpod'un gücünü kullanıyoruz
+    // Hata durumunu yönetme
     ref.listen<AsyncValue<MqttConnectionStatus>>(
-      mqttConnectionStatusProvider,
+      debugStatusProvider,
       (previous, next) {
         next.whenData((newStatus) {
           if (newStatus == MqttConnectionStatus.fault) {
@@ -63,9 +95,9 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
       },
     );
 
-    // Gelen mesajları listeye eklemek için ayrı bir dinleyici
+    // Gelen lokal mesajları listeye ekleme
     ref.listen<AsyncValue<MqttMessage>>(
-      mqttMessagesProvider,
+      debugMessagesProvider,
       (previous, next) {
         next.whenData((msg) {
           if (mounted) {
@@ -164,7 +196,9 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
           onPressed: isConnected
               ? () {
                   if (_subTopicCtrl.text.isNotEmpty) {
-                    ref.read(mqttServiceProvider).subscribe(_subTopicCtrl.text);
+                    ref
+                        .read(debugMqttServiceProvider)
+                        .subscribe(_subTopicCtrl.text);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                           content:
@@ -231,7 +265,7 @@ class _MqttDebugPageState extends ConsumerState<MqttDebugPage> {
                   ? () {
                       if (_pubTopicCtrl.text.isNotEmpty &&
                           _pubPayloadCtrl.text.isNotEmpty) {
-                        ref.read(mqttServiceProvider).publish(
+                        ref.read(debugMqttServiceProvider).publish(
                               _pubTopicCtrl.text,
                               _pubPayloadCtrl.text,
                               retain: _retain,

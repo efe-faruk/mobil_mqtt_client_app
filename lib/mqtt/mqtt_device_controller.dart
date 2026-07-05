@@ -1,82 +1,74 @@
-import 'dart:async';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../data/db/app_database.dart';
 import '../data/repositories/device_repository.dart';
-import 'mqtt_service.dart';
+import '../foreground/foreground_message_models.dart';
 
 class MqttDeviceController {
-  final MqttService _mqttService;
+  final Ref _ref;
   final DeviceRepository _deviceRepository;
 
-  StreamSubscription<MqttMessage>? _messageSubscription;
-
-  // Hızlı eşleştirme için topicState -> Device haritası tutuyoruz.
-  final Map<String, Device> _deviceMap = {};
-
   MqttDeviceController({
-    required MqttService mqttService,
+    required Ref ref,
     required DeviceRepository deviceRepository,
-  })  : _mqttService = mqttService,
+  })  : _ref = ref,
         _deviceRepository = deviceRepository;
 
-  /// Veritabanından tüm cihazları çeker, topicState adreslerine abone olur
-  /// ve gelen mesajları dinlemeye başlar.
+  /// Veritabanından tüm cihazları çeker ve topicState adreslerine
+  /// abone olması için arka plan servisine komut (Command) gönderir.
   Future<void> initialize() async {
-    // 1. Veritabanındaki kayıtlı tüm cihazları al
     final devices = await _deviceRepository.getAllDevices();
+    final List<String> topics = [];
 
-    // 2. Map'i temizle ve cihazları topicState değerlerine göre doldur
-    _deviceMap.clear();
     for (var device in devices) {
-      final topic = device.topicState;
-      if (topic.isNotEmpty) {
-        _deviceMap[topic] = device;
-        // 3. Her bir topicState için MQTT servisine subscribe ol
-        _mqttService.subscribe(topic);
+      if (device.topicState.isNotEmpty) {
+        topics.add(device.topicState);
       }
     }
 
-    // 4. Eğer önceden başlatılmış bir dinleyici varsa iptal et ve yenisini başlat
-    _messageSubscription?.cancel();
-    _messageSubscription = _mqttService.messages.listen(_onMessageReceived);
+    if (topics.isNotEmpty) {
+      final message = UiToServiceMessage(
+        command: UiToServiceCommand.subscribeAllDevices,
+        payload: {'topics': topics},
+      );
+
+      // Arka plandaki TaskHandler'a abone olmasını emrediyoruz
+      FlutterForegroundTask.sendDataToTask(message.toMap());
+    }
   }
 
-  /// Gelen MqttMessage nesnesini işler ve ilgili cihazın veritabanı kaydını günceller.
-  Future<void> _onMessageReceived(MqttMessage message) async {
-    // Topic üzerinden ilgili cihazı bul
-    final device = _deviceMap[message.topic];
+  /// UI üzerinden bir cihaza (switch) açma/kapama komutu fırlatır.
+  void toggleSwitch(Device device, bool turnOn) {
+    // Eğer cihazın bir SET topic'i yoksa (sadece sensörse) işlem yapma
+    if (device.topicSet == null || device.topicSet!.isEmpty) return;
 
-    // Eğer bu topic'e ait kayıtlı bir cihazımız yoksa işlemi sonlandır
-    if (device == null) return;
+    final payload = turnOn ? 'ON' : 'OFF';
 
-    final payload = message.payload.trim();
+    final message = UiToServiceMessage(
+      command: UiToServiceCommand.publish,
+      payload: {
+        'topic': device.topicSet,
+        'payload': payload,
+        'retain': false,
+      },
+    );
 
-    // Cihaz tipine göre veritabanı güncelleme işlemlerini yap
-    if (device.type == 'switch') {
-      bool? isTurnedOn;
+    // Mesajı UI iş parçacığını hiç yormadan arka plana fırlatıyoruz
+    FlutterForegroundTask.sendDataToTask(message.toMap());
 
-      if (payload.toUpperCase() == 'ON') {
-        isTurnedOn = true;
-      } else if (payload.toUpperCase() == 'OFF') {
-        isTurnedOn = false;
-      }
-
-      if (isTurnedOn != null) {
-        await _deviceRepository.updateSwitchState(device.id, isTurnedOn);
-      }
-    } else if (device.type == 'sensor') {
-      await _deviceRepository.updateDeviceLastValue(device.id, payload);
-    }
+    // NOT: Veritabanını burada bilerek güncellemiyoruz!
+    // Mesaj broker'a gidecek, donanım (Örn: ESP32) röleyi çekecek ve "state" topic'inden
+    // cevap döndüğünde IsolateCommunicator veritabanını güncelleyecek.
+    // Böylece uygulaman her zaman donanımın "gerçek" durumunu yansıtacak (Single Source of Truth).
   }
 
   /// Cihazlar güncellendiğinde (ekleme/silme vb.) abonelikleri yenilemek için çağrılabilir.
   Future<void> refreshDevices() async {
-    // Tüm cihazları yeniden yükle ve abonelikleri güncelle
     await initialize();
   }
 
-  /// Controller bellekten atılırken dinlemeyi durdurur.
   void dispose() {
-    _messageSubscription?.cancel();
+    // Artık bellek sızıntısı yapacak bir aboneliğimiz kalmadı
   }
 }

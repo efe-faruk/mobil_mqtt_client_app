@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../foreground/isolate_communicator.dart';
 import '../../data/db/app_database.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../data/repositories/room_repository.dart';
@@ -89,52 +90,63 @@ final brokerConfigProvider =
 });
 
 // ==========================================
-// 5. MQTT Providers (Foreground Hazırlıklı Yapı)
+// 5. Isolate & Foreground Communication Providers
 // ==========================================
 
-final mqttServiceProvider = Provider<MqttService>((ref) {
-  final service = MqttService();
-  ref.onDispose(() {
-    service.disconnect();
-  });
-  return service;
-});
+// UI, bağlantı durumunu doğrudan servisten değil, Notifier'dan okur.
+class MqttConnectionStatusNotifier extends Notifier<String> {
+  @override
+  String build() => 'disconnected';
+
+  void setStatus(String newStatus) {
+    state = newStatus;
+  }
+}
 
 final mqttConnectionStatusProvider =
-    StreamProvider<MqttConnectionStatus>((ref) {
-  final mqttService = ref.watch(mqttServiceProvider);
-  return mqttService.connectionStatus;
+    NotifierProvider<MqttConnectionStatusNotifier, String>(() {
+  return MqttConnectionStatusNotifier();
 });
 
-final mqttMessagesProvider = StreamProvider<MqttMessage>((ref) {
-  final mqttService = ref.watch(mqttServiceProvider);
-  return mqttService.messages;
+// UI'dan arka plana komut göndermek için kullanılacak aracı.
+final isolateCommunicatorProvider = Provider<IsolateCommunicator>((ref) {
+  final communicator = IsolateCommunicator(ref);
+  ref.onDispose(() => communicator.dispose());
+  return communicator;
 });
 
+// Cihazları yönetecek ve komutları arka plana iletecek Controller
 final mqttDeviceControllerProvider = Provider<MqttDeviceController>((ref) {
-  final mqttService = ref.watch(mqttServiceProvider);
   final deviceRepo = ref.watch(deviceRepositoryProvider);
 
-  final controller = MqttDeviceController(
-    mqttService: mqttService,
+  // DİKKAT: Birazdan mqtt_device_controller.dart dosyasını bu yapıya göre güncelleyeceğiz.
+  return MqttDeviceController(
+    ref: ref,
     deviceRepository: deviceRepo,
   );
-
-  ref.onDispose(() {
-    controller.dispose();
-  });
-
-  return controller;
 });
 
-/// Bağlantı durumunu dinleyip Controller'ı otomatik ayağa kaldıran Orkestratör.
+// app_router.dart'ın hata vermemesi için Orkestratörü geri ekliyoruz
 final mqttOrchestratorProvider = Provider<void>((ref) {
-  final statusAsync = ref.watch(mqttConnectionStatusProvider);
+  final status = ref.watch(mqttConnectionStatusProvider);
 
-  statusAsync.whenData((status) {
-    if (status == MqttConnectionStatus.connected) {
-      // Bağlantı kurulduğunda cihazları çek ve subscribe ol
-      ref.read(mqttDeviceControllerProvider).initialize();
-    }
+  if (status == 'connected') {
+    // Bağlantı kurulduğunda cihazları çek ve abone ol işlemleri burada tetiklenebilir
+    ref.read(mqttDeviceControllerProvider).initialize();
+  }
+});
+
+// ==========================================
+// 6. DEBUG EKRANI İÇİN BAĞIMSIZ PROVIDER
+// ==========================================
+// autoDispose sayesinde bu provider sadece Debug ekranında (dinlendiği sürece) yaşar.
+// Ekrandan çıkıldığı an (dinleyici kalmadığında) onDispose tetiklenir ve istemci çökertilir.
+final debugMqttServiceProvider = Provider.autoDispose<MqttService>((ref) {
+  final service = MqttService();
+
+  ref.onDispose(() {
+    service.disconnect(); // Ekrandan çıkınca bağlantıyı kopart ve yok et
   });
+
+  return service;
 });

@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../../core/providers/app_providers.dart';
 import '../../../../data/db/app_database.dart';
 
-class SwitchDeviceCard extends StatelessWidget {
+class SwitchDeviceCard extends ConsumerWidget {
   final Device device;
 
   const SwitchDeviceCard({super.key, required this.device});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isOn = device.isOn ?? false;
 
     // Aktif duruma göre renk paletini belirliyoruz
@@ -27,11 +30,11 @@ class SwitchDeviceCard extends StatelessWidget {
       elevation: 0,
       color: bgColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      // İleride InkWell ile tıklama eklenecek
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: () {
-          // TODO: MQTT Publish komutu gönderilecek
+          // Controller üzerinden arka plana (Isolate) komut fırlatıyoruz
+          ref.read(mqttDeviceControllerProvider).toggleSwitch(device, !isOn);
         },
         child: Padding(
           padding: const EdgeInsets.all(16.0),
@@ -49,7 +52,10 @@ class SwitchDeviceCard extends StatelessWidget {
                   Switch(
                     value: isOn,
                     onChanged: (val) {
-                      // TODO: MQTT Publish komutu gönderilecek
+                      // Controller üzerinden arka plana komut fırlatıyoruz
+                      ref
+                          .read(mqttDeviceControllerProvider)
+                          .toggleSwitch(device, val);
                     },
                     activeColor: Theme.of(context).colorScheme.primary,
                   ),
