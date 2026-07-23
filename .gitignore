@@ -1,11 +1,94 @@
-# Kök dizindeki her şeyi yoksay
-/*
+# Operating system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
 
-# lib klasörünü (ve içindeki her şeyi) takip et
-!/lib/
+# IDE and editor files
+.idea/
+.vscode/
+.atom/
+.history/
+*.iml
+*.ipr
+*.iws
+*.swp
+*.swo
+*~
 
-# pubspec.yaml dosyasını takip et
-!/pubspec.yaml
+# Dart and Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+build/
+coverage/
+doc/api/
+.buildlog/
+migrate_working_dir/
+pubspec_overrides.yaml
+lib/generated_plugin_registrant.dart
 
-# .gitignore dosyasının kendisini takip et (Önerilen)
-!/.gitignore
+# Flutter build artifacts
+app.*.symbols
+app.*.map.json
+
+# Android
+android/.gradle/
+android/.kotlin/
+android/local.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+android/captures/
+android/**/GeneratedPluginRegistrant.java
+**/.cxx/
+
+# Android signing credentials
+android/key.properties
+*.jks
+*.keystore
+
+# iOS
+ios/.symlinks/
+ios/Pods/
+ios/Flutter/.last_build_id
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_assets/
+ios/Flutter/flutter_export_environment.sh
+ios/Runner/GeneratedPluginRegistrant.*
+ios/ServiceDefinitions.json
+
+# macOS
+macos/.symlinks/
+macos/Pods/
+macos/Flutter/ephemeral/
+macos/Flutter/GeneratedPluginRegistrant.swift
+
+# Linux and Windows generated files
+linux/flutter/ephemeral/
+windows/flutter/ephemeral/
+
+# Test and tooling outputs
+test-results/
+integration_test/screenshots/
+
+# Environment files and private keys
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
