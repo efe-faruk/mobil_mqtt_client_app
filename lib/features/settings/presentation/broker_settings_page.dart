@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/providers/app_providers.dart';
+import '../../../foreground/isolate_communicator.dart';
 import '../../../models/broker_config.dart';
 
 class BrokerSettingsPage extends ConsumerStatefulWidget {
@@ -23,6 +24,7 @@ class _BrokerSettingsPageState extends ConsumerState<BrokerSettingsPage> {
   late TextEditingController _passwordController;
 
   bool _useAuth = false;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -51,27 +53,57 @@ class _BrokerSettingsPageState extends ConsumerState<BrokerSettingsPage> {
     super.dispose();
   }
 
-  void _saveSettings() {
-    if (_formKey.currentState!.validate()) {
-      final newConfig = BrokerConfig(
-        host: _hostController.text.trim(),
-        port: int.parse(_portController.text.trim()),
-        clientId: _clientIdController.text.trim(),
-        keepAliveSeconds: int.parse(_keepAliveController.text.trim()),
-        useAuth: _useAuth,
-        username: _useAuth ? _usernameController.text.trim() : '',
-        password: _useAuth ? _passwordController.text.trim() : '',
-      );
+  Future<void> _saveSettings() async {
+    if (_isSaving || !_formKey.currentState!.validate()) return;
 
-      // Notifier üzerinden yeni ayarları kaydedip State'i güncelliyoruz
-      ref.read(brokerConfigProvider.notifier).updateConfig(newConfig).then((_) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Broker ayarları kaydedildi')),
-          );
-          context.pop();
-        }
-      });
+    FocusScope.of(context).unfocus();
+    setState(() => _isSaving = true);
+
+    final newConfig = BrokerConfig(
+      host: _hostController.text.trim(),
+      port: int.parse(_portController.text.trim()),
+      clientId: _clientIdController.text.trim(),
+      keepAliveSeconds: int.parse(_keepAliveController.text.trim()),
+      useAuth: _useAuth,
+      username: _useAuth ? _usernameController.text.trim() : '',
+      password: _useAuth ? _passwordController.text.trim() : '',
+    );
+
+    try {
+      await ref
+          .read(brokerConfigProvider.notifier)
+          .updateConfig(newConfig);
+
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${newConfig.host}:${newConfig.port} kaydedildi ve bağlantı kuruldu.',
+          ),
+        ),
+      );
+      context.pop();
+    } on BrokerConfigApplyException catch (e) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ayarlar kaydedildi ancak bağlantı kurulamadı: ${e.message}',
+          ),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Broker ayarları kaydedilemedi: $e'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
     }
   }
 
@@ -135,8 +167,10 @@ class _BrokerSettingsPageState extends ConsumerState<BrokerSettingsPage> {
                             keyboardType: TextInputType.number,
                             validator: (value) {
                               if (value == null || value.isEmpty) return 'Boş';
-                              if (int.tryParse(value) == null)
-                                return 'Geçersiz';
+                              final port = int.tryParse(value);
+                              if (port == null || port < 1 || port > 65535) {
+                                return '1-65535';
+                              }
                               return null;
                             },
                           ),
@@ -155,8 +189,10 @@ class _BrokerSettingsPageState extends ConsumerState<BrokerSettingsPage> {
                             validator: (value) {
                               if (value == null || value.isEmpty)
                                 return 'Zorunlu';
-                              if (int.tryParse(value) == null)
+                              final keepAlive = int.tryParse(value);
+                              if (keepAlive == null || keepAlive < 1) {
                                 return 'Geçersiz';
+                              }
                               return null;
                             },
                           ),
@@ -245,13 +281,20 @@ class _BrokerSettingsPageState extends ConsumerState<BrokerSettingsPage> {
 
             // 3. Kaydet Butonu
             FilledButton.icon(
-              onPressed: _saveSettings,
-              icon: const Icon(Icons.save),
-              label: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 16.0),
+              onPressed: _isSaving ? null : _saveSettings,
+              icon: _isSaving
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save),
+              label: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16.0),
                 child: Text(
-                  'Ayarları Kaydet',
-                  style: TextStyle(fontSize: 16),
+                  _isSaving
+                      ? 'Kaydediliyor ve bağlanılıyor...'
+                      : 'Ayarları Kaydet',
+                  style: const TextStyle(fontSize: 16),
                 ),
               ),
             ),

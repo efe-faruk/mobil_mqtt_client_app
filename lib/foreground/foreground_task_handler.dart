@@ -17,6 +17,8 @@ class ForegroundTaskHandler extends TaskHandler {
 
   StreamSubscription<MqttConnectionStatus>? _statusSubscription;
   StreamSubscription<MqttMessage>? _messageSubscription;
+  Future<void> _commandQueue = Future<void>.value();
+  String? _brokerEndpoint;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -48,11 +50,19 @@ class ForegroundTaskHandler extends TaskHandler {
 
   @override
   void onReceiveData(Object data) {
-    // UI'dan (Main Isolate) gelen mesajları yakala
-    if (data is Map<String, dynamic>) {
+    if (data is Map) {
       try {
-        final message = UiToServiceMessage.fromMap(data);
-        _processUiCommand(message);
+        final message = UiToServiceMessage.fromMap(
+          Map<String, dynamic>.from(data),
+        );
+
+        // Uyumluluk kontrolü MQTT bağlantı kuyruğunu beklememelidir.
+        if (message.command == UiToServiceCommand.getServiceInfo) {
+          _sendServiceInfo(message.payload);
+          return;
+        }
+
+        _commandQueue = _commandQueue.then((_) => _runUiCommand(message));
       } catch (e) {
         _sendErrorToUi("Gelen UI mesajı parse edilemedi: $e");
       }
@@ -61,10 +71,21 @@ class ForegroundTaskHandler extends TaskHandler {
 
   // --- UI KOMUTLARINI İŞLEME (COMMAND PATTERN) ---
 
-  void _processUiCommand(UiToServiceMessage message) {
+  Future<void> _runUiCommand(UiToServiceMessage message) async {
+    try {
+      await _processUiCommand(message);
+    } catch (e) {
+      _sendErrorToUi('Komut işlenirken hata oluştu: $e');
+    }
+  }
+
+  Future<void> _processUiCommand(UiToServiceMessage message) async {
     switch (message.command) {
+      case UiToServiceCommand.getServiceInfo:
+        _sendServiceInfo(message.payload);
+        break;
       case UiToServiceCommand.startMqtt:
-        _startMqtt(message.payload);
+        await _startMqtt(message.payload);
         break;
       case UiToServiceCommand.stopMqtt:
         _mqttService.disconnect();
@@ -76,8 +97,7 @@ class ForegroundTaskHandler extends TaskHandler {
         _subscribeToTopics(message.payload);
         break;
       case UiToServiceCommand.updateBrokerConfig:
-        _mqttService.disconnect();
-        _startMqtt(message.payload); // Yeni ayarlarla tekrar bağlan
+        await _updateBrokerConfig(message.payload);
         break;
       case UiToServiceCommand.updateDeviceList:
         // Cihaz listesi değiştiğinde yeni topic'lere abone ol
@@ -88,27 +108,50 @@ class ForegroundTaskHandler extends TaskHandler {
 
   // --- MQTT KONTROL METOTLARI ---
 
-  void _startMqtt(Map<String, dynamic>? payload) {
+  Future<void> _startMqtt(Map<String, dynamic>? payload) async {
     if (payload == null) {
       _sendErrorToUi("startMqtt için BrokerConfig payload'ı eksik.");
       return;
     }
 
     try {
-      // Map'ten BrokerConfig oluştur (Güvenli parse)
-      final config = BrokerConfig(
-        host: payload['host'] ?? '',
-        port: payload['port'] ?? 1883,
-        clientId: payload['clientId'] ?? 'flutter_smart_home',
-        keepAliveSeconds: payload['keepAliveSeconds'] ?? 60,
-        useAuth: payload['useAuth'] ?? false,
-        username: payload['username'] ?? '',
-        password: payload['password'] ?? '',
-      );
-
-      _mqttService.connect(config);
+      final config = BrokerConfig.fromMap(payload);
+      _brokerEndpoint = '${config.host}:${config.port}';
+      await _mqttService.connect(config);
     } catch (e) {
       _sendErrorToUi("BrokerConfig oluşturulurken hata: $e");
+    }
+  }
+
+  Future<void> _updateBrokerConfig(Map<String, dynamic>? payload) async {
+    final requestId = payload?['requestId'] as String?;
+    if (requestId == null) {
+      _sendErrorToUi(
+        "updateBrokerConfig için requestId veya payload eksik.",
+      );
+      return;
+    }
+
+    try {
+      final config = BrokerConfig.fromMap(payload!);
+      _brokerEndpoint = '${config.host}:${config.port}';
+      _sendLogToUi('Broker güncellemesi alındı: $_brokerEndpoint');
+
+      _mqttService.disconnect();
+      final result = await _mqttService.connect(config);
+
+      _sendBrokerConfigUpdateResult(
+        requestId: requestId,
+        success: result.isConnected,
+        error: result.error,
+        appliedConfig: result.isConnected ? config : null,
+      );
+    } catch (e) {
+      _sendBrokerConfigUpdateResult(
+        requestId: requestId,
+        success: false,
+        error: 'Broker ayarları servise uygulanamadı: $e',
+      );
     }
   }
 
@@ -146,11 +189,15 @@ class ForegroundTaskHandler extends TaskHandler {
     switch (status) {
       case MqttConnectionStatus.connected:
         notificationTitle = 'Akıllı Ev: Bağlı';
-        notificationText = 'Broker ile iletişim aktif.';
+        notificationText = _brokerEndpoint == null
+            ? 'Broker ile iletişim aktif.'
+            : '$_brokerEndpoint ile iletişim aktif.';
         break;
       case MqttConnectionStatus.connecting:
         notificationTitle = 'Akıllı Ev: Bağlanıyor...';
-        notificationText = 'MQTT Broker\'a bağlanılıyor.';
+        notificationText = _brokerEndpoint == null
+            ? 'MQTT Broker\'a bağlanılıyor.'
+            : '$_brokerEndpoint adresine bağlanılıyor.';
         break;
       case MqttConnectionStatus.disconnected:
         notificationTitle = 'Akıllı Ev: Çevrimdışı';
@@ -158,7 +205,9 @@ class ForegroundTaskHandler extends TaskHandler {
         break;
       case MqttConnectionStatus.fault:
         notificationTitle = 'Akıllı Ev: Hata';
-        notificationText = 'Bağlantı hatası oluştu!';
+        notificationText = _brokerEndpoint == null
+            ? 'Bağlantı hatası oluştu!'
+            : '$_brokerEndpoint bağlantısı kurulamadı.';
         break;
     }
 
@@ -191,6 +240,60 @@ class ForegroundTaskHandler extends TaskHandler {
     final msg = ServiceToUiMessage(
       event: ServiceToUiEvent.error,
       payload: {'error': errorDescription},
+    );
+    FlutterForegroundTask.sendDataToMain(msg.toMap());
+  }
+
+  void _sendServiceInfo(Map<String, dynamic>? payload) {
+    final requestId = payload?['requestId'] as String?;
+    if (requestId == null) return;
+
+    final activeConfig = _mqttService.activeConfig;
+    final msg = ServiceToUiMessage(
+      event: ServiceToUiEvent.serviceInfo,
+      payload: {
+        'requestId': requestId,
+        'protocolVersion': foregroundServiceProtocolVersion,
+        if (activeConfig != null)
+          'activeBroker': {
+            'host': activeConfig.host,
+            'port': activeConfig.port,
+            'clientId': activeConfig.clientId,
+            'keepAliveSeconds': activeConfig.keepAliveSeconds,
+            'useAuth': activeConfig.useAuth,
+          },
+      },
+    );
+    FlutterForegroundTask.sendDataToMain(msg.toMap());
+  }
+
+  void _sendBrokerConfigUpdateResult({
+    required String requestId,
+    required bool success,
+    String? error,
+    BrokerConfig? appliedConfig,
+  }) {
+    final msg = ServiceToUiMessage(
+      event: ServiceToUiEvent.brokerConfigUpdateResult,
+      payload: {
+        'requestId': requestId,
+        'success': success,
+        if (error != null) 'error': error,
+        if (appliedConfig != null)
+          'appliedBroker': {
+            'host': appliedConfig.host,
+            'port': appliedConfig.port,
+            'clientId': appliedConfig.clientId,
+          },
+      },
+    );
+    FlutterForegroundTask.sendDataToMain(msg.toMap());
+  }
+
+  void _sendLogToUi(String message) {
+    final msg = ServiceToUiMessage(
+      event: ServiceToUiEvent.log,
+      payload: {'message': message},
     );
     FlutterForegroundTask.sendDataToMain(msg.toMap());
   }

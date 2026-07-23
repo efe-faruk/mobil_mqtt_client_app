@@ -8,6 +8,18 @@ import '../models/broker_config.dart';
 
 enum MqttConnectionStatus { disconnected, connecting, connected, fault }
 
+class MqttConnectionResult {
+  final MqttConnectionStatus status;
+  final String? error;
+
+  const MqttConnectionResult({
+    required this.status,
+    this.error,
+  });
+
+  bool get isConnected => status == MqttConnectionStatus.connected;
+}
+
 class MqttMessage {
   final String topic;
   final String payload;
@@ -17,6 +29,7 @@ class MqttMessage {
 
 class MqttService {
   MqttServerClient? _client;
+  BrokerConfig? _activeConfig;
   final Set<String> _subscribedTopics = {};
 
   // Stream Controllers
@@ -28,69 +41,98 @@ class MqttService {
   Stream<MqttConnectionStatus> get connectionStatus =>
       _connectionStatusController.stream;
   Stream<MqttMessage> get messages => _messagesController.stream;
+  BrokerConfig? get activeConfig => _activeConfig;
 
   /// Broker'a bağlanır ve gerekli callback'leri ayarlar.
-  Future<void> connect(BrokerConfig config) async {
-    // ========================================================
-    // YENİ GÜVENLİK KONTROLÜ: Arka plan zaten aktifse (Çakışma Önleyici)
-    // ========================================================
+  Future<MqttConnectionResult> connect(BrokerConfig config) async {
     if (_client != null &&
         _client!.connectionStatus?.state ==
-            mqtt.MqttConnectionState.connected) {
-      // Aynı ID ile bağlıysak soketi hiç yorma, yeni uyanan UI'a "Ben bağlıyım" mesajı at
+            mqtt.MqttConnectionState.connected &&
+        _activeConfig == config) {
       _connectionStatusController.add(MqttConnectionStatus.connected);
-      return;
+      return const MqttConnectionResult(
+        status: MqttConnectionStatus.connected,
+      );
     }
 
-    // Eğer asılı kalmış eski bir client (connecting/fault durumunda) varsa temizle
-    if (_client != null) {
-      _client!.autoReconnect = false;
-      _client!.disconnect();
+    final previousClient = _client;
+    _client = null;
+    _activeConfig = null;
+    if (previousClient != null) {
+      previousClient.autoReconnect = false;
+      previousClient.disconnect();
     }
-    // ========================================================
 
     _connectionStatusController.add(MqttConnectionStatus.connecting);
 
-    // Client ayarları
-    _client = MqttServerClient(config.host, config.clientId)
+    final client = MqttServerClient(config.host, config.clientId)
       ..port = config.port
       ..logging(on: false)
-      ..keepAlivePeriod = 60
-      ..autoReconnect = true // Otomatik reconnect mantığı aktif
-      ..onDisconnected = _onDisconnected
-      ..onConnected = _onConnected
-      ..onAutoReconnected = _onAutoReconnected;
+      ..keepAlivePeriod = config.keepAliveSeconds
+      ..autoReconnect = true;
 
-    // Bağlantı mesajı kurulumu
+    client.onDisconnected = () {
+      _onDisconnected(client);
+    };
+    client.onConnected = () {
+      _onConnected(client);
+    };
+    client.onAutoReconnected = () {
+      _onAutoReconnected(client);
+    };
+
+    _client = client;
+
     final connMess = mqtt.MqttConnectMessage()
         .withClientIdentifier(config.clientId)
-        .startClean() // Foreground service olduğu için clean session genelde daha sağlıklıdır
+        .startClean()
         .withWillQos(mqtt.MqttQos.atLeastOnce);
 
-    _client!.connectionMessage = connMess;
+    client.connectionMessage = connMess;
 
     try {
-      await _client!.connect(config.username, config.password);
+      await client.connect(
+        config.useAuth ? config.username : null,
+        config.useAuth ? config.password : null,
+      );
     } catch (e) {
-      _client?.disconnect();
+      _discardClient(client);
       _connectionStatusController.add(MqttConnectionStatus.fault);
-      return;
+      return MqttConnectionResult(
+        status: MqttConnectionStatus.fault,
+        error: 'Broker bağlantısı kurulamadı: $e',
+      );
     }
 
-    if (_client!.connectionStatus!.state ==
+    if (identical(_client, client) &&
+        client.connectionStatus?.state ==
         mqtt.MqttConnectionState.connected) {
+      _activeConfig = config;
       _connectionStatusController.add(MqttConnectionStatus.connected);
-      _setupMessageListener();
+      _setupMessageListener(client);
+      return const MqttConnectionResult(
+        status: MqttConnectionStatus.connected,
+      );
     } else {
-      _client?.disconnect();
+      final returnCode = client.connectionStatus?.returnCode;
+      _discardClient(client);
       _connectionStatusController.add(MqttConnectionStatus.fault);
+      return MqttConnectionResult(
+        status: MqttConnectionStatus.fault,
+        error: returnCode == null
+            ? 'Broker bağlantısı kurulamadı.'
+            : 'Broker bağlantısı reddedildi: $returnCode',
+      );
     }
   }
 
   /// Bağlantıyı sonlandırır ve stream'leri günceller.
   void disconnect() {
-    _client?.autoReconnect = false; // Kasıtlı çıkışta reconnect'i engelle
-    _client?.disconnect();
+    final client = _client;
+    _client = null;
+    _activeConfig = null;
+    client?.autoReconnect = false;
+    client?.disconnect();
     _connectionStatusController.add(MqttConnectionStatus.disconnected);
   }
 
@@ -138,9 +180,11 @@ class MqttService {
   // --- PRIVATE METHODS & CALLBACKS ---
 
   /// Gelen mesajları dinleyip Stream'e aktarır.
-  void _setupMessageListener() {
-    _client!.updates
+  void _setupMessageListener(MqttServerClient client) {
+    client.updates
         ?.listen((List<mqtt.MqttReceivedMessage<mqtt.MqttMessage>> c) {
+      if (!identical(_client, client)) return;
+
       final mqtt.MqttPublishMessage recMess =
           c[0].payload as mqtt.MqttPublishMessage;
       final String payload = mqtt.MqttPublishPayload.bytesToStringAsString(
@@ -150,19 +194,19 @@ class MqttService {
     });
   }
 
-  /// İlk kez bağlandığında tetiklenir.
-  void _onConnected() {
+  void _onConnected(MqttServerClient client) {
+    if (!identical(_client, client)) return;
     _connectionStatusController.add(MqttConnectionStatus.connected);
     _resubscribeToTopics();
   }
 
-  /// Bağlantı koptuğunda tetiklenir.
-  void _onDisconnected() {
+  void _onDisconnected(MqttServerClient client) {
+    if (!identical(_client, client)) return;
     _connectionStatusController.add(MqttConnectionStatus.disconnected);
   }
 
-  /// Otomatik reconnect başarılı olduğunda tetiklenir.
-  void _onAutoReconnected() {
+  void _onAutoReconnected(MqttServerClient client) {
+    if (!identical(_client, client)) return;
     _connectionStatusController.add(MqttConnectionStatus.connected);
     _resubscribeToTopics();
   }
@@ -172,5 +216,14 @@ class MqttService {
     for (var topic in _subscribedTopics) {
       _client?.subscribe(topic, mqtt.MqttQos.atLeastOnce);
     }
+  }
+
+  void _discardClient(MqttServerClient client) {
+    if (identical(_client, client)) {
+      _client = null;
+      _activeConfig = null;
+    }
+    client.autoReconnect = false;
+    client.disconnect();
   }
 }

@@ -1,5 +1,8 @@
+const int foregroundServiceProtocolVersion = 1;
+
 /// UI'dan Foreground Service'e gönderilecek komutların tipleri
 enum UiToServiceCommand {
+  getServiceInfo,
   startMqtt,
   stopMqtt,
   publish,
@@ -10,7 +13,9 @@ enum UiToServiceCommand {
 
 /// Foreground Service'ten UI'a gönderilecek olayların tipleri
 enum ServiceToUiEvent {
+  serviceInfo,
   connectionStatusChanged,
+  brokerConfigUpdateResult,
   mqttMessageReceived,
   error,
   log,

@@ -73,8 +73,15 @@ class BrokerConfigNotifier extends Notifier<BrokerConfig> {
 
   Future<void> updateConfig(BrokerConfig newConfig) async {
     final repository = ref.read(settingsRepositoryProvider);
+
+    // Tek kaydetme işleminin sırası:
+    // 1. Kalıcılaştır, 2. Riverpod durumunu güncelle,
+    // 3. Foreground servise uygulat ve o isteğin bağlantı sonucunu bekle.
     await repository.saveBrokerConfig(newConfig);
     state = newConfig;
+    await ref
+        .read(isolateCommunicatorProvider)
+        .updateBrokerConfig(newConfig);
   }
 
   Future<void> resetConfig() async {

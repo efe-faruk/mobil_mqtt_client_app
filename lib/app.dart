@@ -29,21 +29,22 @@ class _SmartHomeAppState extends ConsumerState<SmartHomeApp> {
       // 2. Isolate'in tam olarak ayağa kalkması ve portların açılması için ufak bir pay
       await Future.delayed(const Duration(milliseconds: 500));
 
+      final communicator = ref.read(isolateCommunicatorProvider);
+      try {
+        // Servis eski bir TaskHandler ile çalışıyorsa güncel handler'ı yükler.
+        await communicator.ensureCompatibleService();
+      } catch (e) {
+        debugPrint('Foreground servis hazırlanamadı: $e');
+        return;
+      }
+
       // 3. SharedPreferences'tan kayıtlı broker ayarlarını Riverpod üzerinden oku
       final config = ref.read(brokerConfigProvider);
 
       // 4. Arka plandaki servise "Bağlan" komutunu ve broker bilgilerini paketle
       final message = UiToServiceMessage(
         command: UiToServiceCommand.startMqtt,
-        payload: {
-          'host': config.host,
-          'port': config.port,
-          'clientId': config.clientId,
-          'keepAliveSeconds': config.keepAliveSeconds,
-          'useAuth': config.useAuth,
-          'username': config.username,
-          'password': config.password,
-        },
+        payload: config.toMap(),
       );
 
       // 5. Komutu Isolate'e fırlat! (Bu komut gidince MqttService.connect çalışacak)
