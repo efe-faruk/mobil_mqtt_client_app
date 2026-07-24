@@ -5,6 +5,8 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'app.dart';
 import 'core/providers/app_providers.dart';
+import 'data/repositories/settings_repository.dart';
+import 'data/storage/secure_settings_storage.dart';
 import 'foreground/foreground_task_handler.dart';
 
 void _initForegroundTask() {
@@ -56,11 +58,17 @@ void main() async {
   // DİKKAT: startService() komutunu buradan kaldırdık! UI artık bloklanmayacak.
 
   final prefs = await SharedPreferences.getInstance();
+  const secureStorage = FlutterSecureSettingsStorage();
+  final settingsRepository = SettingsRepository(prefs, secureStorage);
+  final initialBrokerConfig = await settingsRepository.loadBrokerConfig();
 
   runApp(
     ProviderScope(
       overrides: [
         sharedPreferencesProvider.overrideWithValue(prefs),
+        secureSettingsStorageProvider.overrideWithValue(secureStorage),
+        settingsRepositoryProvider.overrideWithValue(settingsRepository),
+        initialBrokerConfigProvider.overrideWithValue(initialBrokerConfig),
       ],
       child: const SmartHomeApp(),
     ),

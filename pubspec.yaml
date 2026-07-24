@@ -53,6 +53,7 @@ dependencies:
 
   # Key-Value Storage
   shared_preferences: ^2.2.3
+  flutter_secure_storage: ^10.3.1
 
   # ID Generation
   uuid: ^4.4.0

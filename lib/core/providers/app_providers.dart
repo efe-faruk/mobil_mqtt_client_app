@@ -6,6 +6,7 @@ import '../../data/db/app_database.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../data/repositories/room_repository.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../../data/storage/secure_settings_storage.dart';
 import '../../models/broker_config.dart';
 import '../../mqtt/mqtt_service.dart';
 import '../../mqtt/mqtt_device_controller.dart';
@@ -17,6 +18,15 @@ import '../../mqtt/mqtt_device_controller.dart';
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError(
       'sharedPreferencesProvider must be overridden in main.dart');
+});
+
+final secureSettingsStorageProvider = Provider<SecureSettingsStorage>((ref) {
+  return const FlutterSecureSettingsStorage();
+});
+
+final initialBrokerConfigProvider = Provider<BrokerConfig>((ref) {
+  throw UnimplementedError(
+      'initialBrokerConfigProvider must be overridden in main.dart');
 });
 
 final databaseProvider = Provider<AppDatabase>((ref) {
@@ -33,7 +43,8 @@ final databaseProvider = Provider<AppDatabase>((ref) {
 
 final settingsRepositoryProvider = Provider<SettingsRepository>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  return SettingsRepository(prefs);
+  final secureStorage = ref.watch(secureSettingsStorageProvider);
+  return SettingsRepository(prefs, secureStorage);
 });
 
 final roomRepositoryProvider = Provider<RoomRepository>((ref) {
@@ -67,8 +78,7 @@ final devicesProvider = StreamProvider<List<Device>>((ref) {
 class BrokerConfigNotifier extends Notifier<BrokerConfig> {
   @override
   BrokerConfig build() {
-    final repository = ref.watch(settingsRepositoryProvider);
-    return repository.loadBrokerConfig();
+    return ref.watch(initialBrokerConfigProvider);
   }
 
   Future<void> updateConfig(BrokerConfig newConfig) async {
@@ -87,7 +97,7 @@ class BrokerConfigNotifier extends Notifier<BrokerConfig> {
   Future<void> resetConfig() async {
     final repository = ref.read(settingsRepositoryProvider);
     await repository.clearBrokerConfig();
-    state = repository.loadBrokerConfig();
+    state = await repository.loadBrokerConfig();
   }
 }
 
